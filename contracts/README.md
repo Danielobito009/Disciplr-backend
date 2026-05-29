@@ -13,7 +13,35 @@ The accountability vault allows users to:
 - Define milestones with individual amounts that must sum to the total
 - Specify a verifier authorized to validate milestone completion
 - Set success and failure destinations for fund release
- - Allow reclaiming residual (dust) token balances to the creator after settlement
+- Allow reclaiming residual (dust) token balances to the creator after settlement
+- **Incrementally release funds** per verified milestone using `claim_milestone(index)`,
+  so the creator receives their stake back proportionally as each goal is confirmed.
+
+### Incremental Per-Milestone Claiming
+
+`claim_milestone(index)` releases a single verified milestone's amount to
+`success_destination` as soon as it is verified via `check_in`. This allows the
+creator to receive incremental payouts rather than waiting for all milestones to
+complete before any funds are released.
+
+#### Key Properties
+
+| Property | Behaviour |
+|---|---|
+| **Authorization** | Only the `creator` or `verifier` may call `claim_milestone`. |
+| **Pre-condition** | The target milestone must already be marked `verified` via `check_in`. |
+| **Double-claim guard** | Each `Milestone` carries a `released: bool` flag. Calling `claim_milestone` a second time on the same index returns `Error::MilestoneAlreadyReleased`. |
+| **Auto-completion** | When the last milestone is claimed, the vault status transitions to `Completed` automatically. |
+| **Slash safety** | `slash_on_miss` only slashes the funds *still held by the contract* (`vault.staked`). Milestones already released via `claim_milestone` are excluded from the slash. |
+| **Bulk-claim guard** | Once any milestone has been released via `claim_milestone`, the bulk `claim` function returns `Error::PartiallyReleased` to prevent double-counting. |
+
+#### Example Flow
+
+```
+create_vault → stake → check_in(0) → claim_milestone(0)   ← 300 tokens released
+                     → check_in(1) → claim_milestone(1)   ← 700 tokens released, vault → Completed
+```
+
 
 ### Arithmetic Safety
 

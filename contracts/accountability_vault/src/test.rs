@@ -61,6 +61,7 @@ fn setup_with_oracle(
             amount: amounts[i],
             due_date: 1_000 + due,
             verified: false,
+            released: false,
         });
     }
 
@@ -221,6 +222,7 @@ fn test_stake_from_with_sufficient_allowance() {
             amount: 1_000,
             due_date: 1_200,
             verified: false,
+            released: false,
         },
     ];
     contract.create_vault(
@@ -266,6 +268,7 @@ fn test_stake_from_insufficient_allowance_fails() {
             amount: 1_000,
             due_date: 1_200,
             verified: false,
+            released: false,
         },
     ];
     contract.create_vault(
@@ -308,6 +311,7 @@ fn test_stake_from_non_creator_from_fails() {
             amount: 1_000,
             due_date: 1_200,
             verified: false,
+            released: false,
         },
     ];
     contract.create_vault(
@@ -493,6 +497,7 @@ fn test_vault_has_oracle_field_when_set() {
             amount: 500,
             due_date: 1_200,
             verified: false,
+            released: false,
         },
     ];
     contract.create_vault(
@@ -548,6 +553,7 @@ fn test_stake_from_oracle_checkin_claim_full_flow() {
             amount: 500,
             due_date: 1_200,
             verified: false,
+            released: false,
         },
     ];
     contract.create_vault(
@@ -739,5 +745,155 @@ fn test_gas_benchmarks_slash_on_miss_10_milestones() {
     assert!(slash_mem < 250_000);
 }
 
+// ── per-milestone claim tests ─────────────────────────────────────────────────
 
+/// Verify that a single verified milestone's funds are released incrementally.
+#[test]
+fn test_claim_milestone_single() {
+    let s = setup(&[100], &[500]);
+    s.contract.stake(&s.creator);
 
+    s.contract.check_in(&s.verifier, &0);
+    s.contract.claim_milestone(&s.creator, &0);
+
+    let vault = s.contract.get_vault();
+    // Single milestone fully claimed → vault is Completed.
+    assert_eq!(vault.status, VaultStatus::Completed);
+    assert_eq!(vault.staked, 0);
+
+    let token_client = token::Client::new(&s.env, &s.token);
+    assert_eq!(token_client.balance(&s.success), 500);
+}
+
+/// Verify incremental release: each milestone's funds are sent upon individual claim.
+#[test]
+fn test_claim_milestone_incremental_two_milestones() {
+    let s = setup(&[100, 200], &[300, 700]);
+    s.contract.stake(&s.creator);
+
+    let token_client = token::Client::new(&s.env, &s.token);
+
+    // Verify and claim milestone 0 only.
+    s.contract.check_in(&s.verifier, &0);
+    s.contract.claim_milestone(&s.creator, &0);
+
+    // Only 300 should be released so far; vault still Active.
+    assert_eq!(token_client.balance(&s.success), 300);
+    let vault = s.contract.get_vault();
+    assert_eq!(vault.status, VaultStatus::Active);
+    assert_eq!(vault.staked, 700);
+
+    // Now verify and claim milestone 1 — vault should become Completed.
+    s.contract.check_in(&s.verifier, &1);
+    s.contract.claim_milestone(&s.creator, &1);
+
+    assert_eq!(token_client.balance(&s.success), 1000);
+    let vault = s.contract.get_vault();
+    assert_eq!(vault.status, VaultStatus::Completed);
+    assert_eq!(vault.staked, 0);
+}
+
+/// Double-claiming the same milestone must panic.
+#[test]
+#[should_panic]
+fn test_claim_milestone_double_claim_fails() {
+    let s = setup(&[100], &[500]);
+    s.contract.stake(&s.creator);
+
+    s.contract.check_in(&s.verifier, &0);
+    s.contract.claim_milestone(&s.creator, &0);
+    // Second claim on same milestone — must be rejected with MilestoneAlreadyReleased.
+    s.contract.claim_milestone(&s.creator, &0);
+}
+
+/// Claiming an unverified milestone must panic.
+#[test]
+#[should_panic]
+fn test_claim_milestone_not_verified_fails() {
+    let s = setup(&[100, 200], &[300, 700]);
+    s.contract.stake(&s.creator);
+
+    // Milestone 0 has NOT been checked in — must fail with MilestonesIncomplete.
+    s.contract.claim_milestone(&s.creator, &0);
+}
+
+/// An out-of-range index must panic.
+#[test]
+#[should_panic]
+fn test_claim_milestone_index_out_of_range_fails() {
+    let s = setup(&[100], &[500]);
+    s.contract.stake(&s.creator);
+
+    s.contract.check_in(&s.verifier, &0);
+    // Index 1 doesn't exist — must fail with MilestoneIndexOutOfRange.
+    s.contract.claim_milestone(&s.creator, &1);
+}
+
+/// Unauthorized caller must be rejected.
+#[test]
+#[should_panic]
+fn test_claim_milestone_unauthorized_fails() {
+    let s = setup(&[100], &[500]);
+    s.contract.stake(&s.creator);
+
+    s.contract.check_in(&s.verifier, &0);
+    let random = Address::generate(&s.env);
+    s.contract.claim_milestone(&random, &0);
+}
+
+/// Once a milestone has been claimed via claim_milestone, bulk `claim` must panic.
+#[test]
+#[should_panic]
+fn test_bulk_claim_rejected_after_partial_milestone_claim() {
+    let s = setup(&[100, 200], &[300, 700]);
+    s.contract.stake(&s.creator);
+
+    s.contract.check_in(&s.verifier, &0);
+    s.contract.check_in(&s.verifier, &1);
+
+    // Incrementally claim milestone 0.
+    s.contract.claim_milestone(&s.creator, &0);
+    // Bulk claim must now fail with PartiallyReleased.
+    s.contract.claim(&s.creator);
+}
+
+/// slash_on_miss after a partial claim should only slash the remaining (unreleased) amount.
+#[test]
+fn test_slash_on_miss_after_partial_claim() {
+    let s = setup(&[100, 500], &[300, 700]);
+    s.contract.stake(&s.creator);
+
+    let token_client = token::Client::new(&s.env, &s.token);
+
+    // Verify and claim milestone 0 (300 tokens released to success).
+    s.contract.check_in(&s.verifier, &0);
+    s.contract.claim_milestone(&s.creator, &0);
+    assert_eq!(token_client.balance(&s.success), 300);
+
+    // Advance past the overall deadline and slash remaining 700 tokens.
+    s.env.ledger().set_timestamp(2_000);
+    s.contract.slash_on_miss();
+
+    let vault = s.contract.get_vault();
+    assert_eq!(vault.status, VaultStatus::Failed);
+    // Only the 700 still in the contract should be slashed.
+    assert_eq!(token_client.balance(&s.failure), 700);
+    // Success destination still holds the 300 already released.
+    assert_eq!(token_client.balance(&s.success), 300);
+}
+
+/// Verifier (not creator) can also call claim_milestone.
+#[test]
+fn test_claim_milestone_by_verifier() {
+    let s = setup(&[100], &[500]);
+    s.contract.stake(&s.creator);
+
+    s.contract.check_in(&s.verifier, &0);
+    s.contract.claim_milestone(&s.verifier, &0);
+
+    let vault = s.contract.get_vault();
+    assert_eq!(vault.status, VaultStatus::Completed);
+
+    let token_client = token::Client::new(&s.env, &s.token);
+    assert_eq!(token_client.balance(&s.success), 500);
+}

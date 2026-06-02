@@ -162,10 +162,48 @@ export const envSchema = z
 
 export type Env = z.infer<typeof envSchema>;
 export type JwtKey = { kid: string; secret: string; retiredAt?: Date };
+export type EnvWarning = { field: string; message: string };
 
 /** Returns parsed JWT keys from the environment. */
 export function getJwtKeys(env: Env): JwtKey[] {
   // The envSchema already transformed JWT_KEYS into an array of objects.
   // TypeScript cannot infer that, so we cast.
   return (env as any).JWT_KEYS as JwtKey[];
+}
+
+/**
+ * Validates and parses environment variables.
+ * Returns parsed env and any non-fatal warnings.
+ * Throws on hard validation failures.
+ */
+export function validateEnv(
+  raw?: Record<string, string | undefined>,
+): { env: Env; warnings: EnvWarning[] } {
+  const input = raw ?? process.env;
+  const result = envSchema.safeParse(input);
+
+  if (!result.success) {
+    const messages = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+    throw new Error(`Environment validation failed: ${messages}`);
+  }
+
+  const warnings: EnvWarning[] = [];
+
+  // Warn if Soroban vars are partially configured
+  const sorobanVars = [
+    'SOROBAN_CONTRACT_ID',
+    'SOROBAN_NETWORK_PASSPHRASE',
+    'SOROBAN_SOURCE_ACCOUNT',
+    'SOROBAN_RPC_URL',
+    'SOROBAN_SECRET_KEY',
+  ] as const;
+  const sorobanSet = sorobanVars.filter((k) => !!(result.data as any)[k]);
+  if (sorobanSet.length > 0 && sorobanSet.length < sorobanVars.length) {
+    warnings.push({
+      field: 'SOROBAN',
+      message: `Soroban is partially configured (${sorobanSet.length}/${sorobanVars.length} vars set). Submit mode disabled.`,
+    });
+  }
+
+  return { env: result.data, warnings };
 }

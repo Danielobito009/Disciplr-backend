@@ -9,6 +9,13 @@ import { forceRevokeUserSessions } from '../services/session.js'
 import { createAuditLog, getAuditLogById, listAuditLogs } from '../lib/audit-logs.js'
 import { cancelVaultById } from '../services/vaultStore.js'
 import { getDBHealthMetrics } from '../services/dbMetrics.js'
+import {
+  getFlag,
+  setFlag,
+  FeatureFlag,
+  isValidFeatureFlag,
+  getAllFlags,
+} from '../services/featureFlags.js'
 import { pool } from '../db/index.js'
 import { db } from '../db/knex.js'
 import { getAbuseCategoryCounts } from '../security/abuse-monitor.js'

@@ -7,6 +7,8 @@ import {
   verifyDownloadToken,
   type AuthenticatedRequest,
 } from '../middleware/auth.js'
+import { requireScopes } from '../middleware/apiKeyAuth.js'
+import { ApiScope } from '../types/auth.js'
 import {
   enqueueExportJob,
   getJob,
@@ -38,7 +40,7 @@ export function createExportRouter(jobSystem: BackgroundJobSystem): Router {
     pollIntervalMs: 1000,
   })
 
-  router.post('/me', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+  router.post('/me', authenticate, requireScopes(ApiScope.ReadAnalytics, ApiScope.ReadVaults), async (req: AuthenticatedRequest, res: Response) => {
     const options = parseOptions(req)
     if (!options) {
       res.status(400).json({ error: 'Invalid format or scope parameter' })
@@ -66,7 +68,7 @@ export function createExportRouter(jobSystem: BackgroundJobSystem): Router {
     }
   })
 
-  router.post('/admin', authenticate, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  router.post('/admin', authenticate, requireAdmin, requireScopes(ApiScope.ReadAnalytics, ApiScope.ReadVaults), async (req: AuthenticatedRequest, res: Response) => {
     const options = parseOptions(req)
     if (!options) {
       res.status(400).json({ error: 'Invalid format or scope parameter' })

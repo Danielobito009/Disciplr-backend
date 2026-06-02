@@ -275,6 +275,36 @@ Migration tooling is standardized with Knex and PostgreSQL.
 - Baseline migration: `db/migrations/20260225190000_initial_baseline.cjs`
 - Full process (authoring, rollout, rollback, CI/CD): `docs/database-migrations.md`
 
+### Soroban Smart Contract Integration
+
+The backend can submit transactions directly to Soroban smart contracts when configured with the following environment variables:
+
+- `SOROBAN_CONTRACT_ID` — The contract address for the accountability vault
+- `SOROBAN_NETWORK_PASSPHRASE` — Stellar network passphrase (e.g., "Test SDF Network ; September 2015")
+- `SOROBAN_SOURCE_ACCOUNT` — Source account public key for transactions
+- `SOROBAN_RPC_URL` — Soroban RPC endpoint URL
+- `SOROBAN_SECRET_KEY` — Secret key for signing transactions (keep secure)
+
+#### Vault Lifecycle Methods
+
+The `SorobanClient` provides the following methods to drive the full vault lifecycle:
+
+| Method | Arguments | Description |
+|---|---|---|
+| `submitVaultCreation` | `vaultId`, `amount`, `verifier`, `successDestination`, `failureDestination`, `milestones` | Creates a new accountability vault |
+| `submitStake` | `vaultId`, `amount` | Stakes tokens into an existing vault |
+| `submitCheckIn` | `vaultId`, `milestoneId`, `evidenceHash` | Records completion of a milestone with a 32-byte evidence hash |
+| `submitSlash` | `vaultId`, `milestoneId` | Slashes funds for missed milestone |
+| `submitClaim` | `vaultId` | Claims released funds from completed vault |
+| `submitWithdraw` | `vaultId` | Withdraws remaining funds |
+
+All lifecycle methods return a `VaultLifecycleResponse` with:
+- `method`: The contract method called
+- `args`: The arguments passed
+- `submission`: Object containing `attempted`, `status` (`success`/`not_configured`/`error`), and optionally `txHash` or `error`
+
+The methods are feature-flagged: if Soroban is not fully configured, they return `status: 'not_configured'` instead of throwing errors.
+
 ```text
 disciplr-backend/
 ├── src/
@@ -327,3 +357,33 @@ Quick start:
 npm run migrate:latest
 npm run migrate:status
 ```
+
+## Rate Limit Tiers
+
+The API uses per-IP and per-org rate limiting. Different limits apply based on organization tier.
+
+### Configuration
+
+Set these environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ORG_RATE_LIMIT_MAX` | 200 | Max requests per minute per organization |
+| `ORG_RATE_LIMIT_WINDOW_MS` | 60000 | Time window in milliseconds for org limits |
+| `SECURITY_RATE_LIMIT_MAX_REQUESTS` | 120 | Max requests per minute per IP |
+
+### How it works
+
+1. **Per-IP limit** - Prevents a single IP from flooding the API
+2. **Per-org limit** - Prevents one organization from consuming all resources
+3. **Combined key** - Rate limit key = `org:ORG_ID:IP_ADDRESS`
+
+### Rate limit response
+
+When exceeded, returns HTTP 429 with:
+
+```json
+{
+  "error": "Too many requests, please try again later.",
+  "retryAfter": 60
+}

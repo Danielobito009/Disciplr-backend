@@ -5,7 +5,12 @@ import { TransactionETLService } from '../services/transactionETL.js'
 import { MilestoneEmbeddingSource, ReindexCursorStore } from '../services/evidenceReindex.js'
 import { EmbeddingProvider } from '../services/embeddingProvider.js'
 import { buildSlashOnMissPayload } from '../services/soroban.js'
-import { markVaultExpiries, sendMilestoneReminders } from '../services/vaultExpiry.service.js'
+import {
+  markVaultExpiries,
+  sendMilestoneReminders,
+  sendMilestoneDigestReminders,
+  processDeferredReminders,
+} from '../services/vaultExpiry.service.js'
 import { cleanupExpiredSessions } from '../services/session.js'
 import { relayOutboxBatch } from '../services/outboxRelay.js'
 import { runReindexBatches } from '../services/evidenceReindex.js'
@@ -63,6 +68,25 @@ export const createDefaultJobHandlers = (
     logJob(
       'milestone.reminders',
       `sent ${remindersSent} reminders attempt=${context.attempt}`,
+    )
+  },
+  'milestone.reminders.digest': async (payload, context) => {
+    const result = await sendMilestoneDigestReminders({
+      leadTimesMs: payload.leadTimesMs,
+      limit: payload.limit,
+    })
+    logJob(
+      'milestone.reminders.digest',
+      `sent=${result.digestsSent} deferred=${result.digestsDeferred} milestones=${result.totalMilestones} attempt=${context.attempt}`,
+    )
+  },
+  'milestone.reminders.deferred': async (payload, context) => {
+    const delivered = await processDeferredReminders({
+      batchSize: payload.batchSize,
+    })
+    logJob(
+      'milestone.reminders.deferred',
+      `delivered=${delivered} attempt=${context.attempt}`,
     )
   },
   'oracle.call': async (payload, context) => {

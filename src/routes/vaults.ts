@@ -15,6 +15,7 @@ import {
   IdempotencyConflictError,
   validateIdempotencyKey,
   scopeIdempotencyKey,
+  type OwnerContext,
 } from '../services/idempotency.js'
 import { buildVaultCreationPayload } from '../services/soroban.js'
 import { createVaultWithMilestones, getVaultById, listVaults, cancelVaultById, updateVaultById, getVaultRevisionById, getVaultETag } from '../services/vaultStore.js'
@@ -91,9 +92,15 @@ vaultsRouter.post('/', authenticate, async (req: Request, res: Response, next: N
 
   const requestHash = hashRequestPayload(req.body)
 
+  // Derive owner from authenticated principal (JWT or API key)
+  const owner: OwnerContext = {
+    userId: req.user?.userId ?? req.apiKeyAuth?.userId ?? null,
+    orgId: req.apiKeyAuth?.orgId ?? req.user?.enterpriseId ?? null,
+  }
+
   if (scopedIdempotencyKey) {
     try {
-      const cached = await getIdempotentResponse<VaultCreateResponse>(scopedIdempotencyKey, requestHash)
+      const cached = await getIdempotentResponse<VaultCreateResponse>(scopedIdempotencyKey, requestHash, owner)
       if (cached !== null) {
         res.status(200).json({ ...cached, idempotency: { key: rawIdempotencyKey, replayed: true } })
         return
@@ -145,7 +152,7 @@ vaultsRouter.post('/', authenticate, async (req: Request, res: Response, next: N
     }
 
     if (scopedIdempotencyKey) {
-      await saveIdempotentResponse(scopedIdempotencyKey, requestHash, vault.id, responseBody)
+      await saveIdempotentResponse(scopedIdempotencyKey, requestHash, vault.id, responseBody, owner)
     }
 
     createAuditLog({
@@ -160,7 +167,7 @@ vaultsRouter.post('/', authenticate, async (req: Request, res: Response, next: N
     res.status(201).json(responseBody)
   } catch (error) {
     if (scopedIdempotencyKey) {
-      failPendingIdempotentResponse(scopedIdempotencyKey, requestHash, error)
+      failPendingIdempotentResponse(scopedIdempotencyKey, requestHash, error, owner)
     }
 
     console.error('Vault creation failed', error)
